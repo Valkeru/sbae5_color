@@ -6,10 +6,12 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/pci.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Igor Kobiakov");
-MODULE_DESCRIPTION("SB AE-5 LED color control");
+MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED color control");
 
 #define REGION_SIZE 0x1024
 #define LED_CONTROL_OFFSET 0x320
@@ -31,12 +33,44 @@ static void __iomem *mmio_base;
 
 unsigned long long base_address = 0;
 
-// Use two file names to be able to detect particular device in OpenRGB
-#define AE5_PROC_FILENAME "sbae5_led"
-#define AE5_PLUS_PROC_FILENAME "sbae5_plus_led"
+#define PROC_FILENAME "sbae5_led"
 
-const char* proc_filename;
+static const char* device_name;
+static const char* device_location;
 
+static struct kobject *my_kobject;
+
+/**
+ * Provides device location on PCI bus
+ * Calls by kernel when user reads /sys/kernel/sbae5_color/device_location
+ *
+ * @param kobj Kernel object
+ * @param attr Attribute to read
+ * @param buf Buffer to send to user
+ * @return Total bytes written
+ */
+static ssize_t device_location_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
+    return sprintf(buf, "PCI: %s\n", device_location);
+}
+
+/**
+ * Provides device name
+ * Calls by kernel when user reads /sys/kernel/sbae5_color/device_name
+ *
+ * @param kobj Kernel object
+ * @param attr Attribute to read
+ * @param buf Buffer to send to user
+ * @return Total bytes written
+ */
+static ssize_t device_name_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
+    return sprintf(buf, "%s\n", device_name);
+}
+
+/**
+ * Register attributes name and location
+ */
+static struct kobj_attribute device_location_attribute = __ATTR(device_location, 0664, device_location_show, NULL);
+static struct kobj_attribute device_name_attribute = __ATTR(device_name, 0664, device_name_show, NULL);
 
 
 /**
@@ -87,6 +121,13 @@ static void set_led_color(uint32_t led_color)
     }
 }
 
+/**
+ * Called by kernel on write into /proc/sbae5_led
+ *
+ * @param file File
+ * @param __user Input data buffer
+ * @return Total bytes count
+ */
 static ssize_t proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos)
 {
     const int color_buffer_size = 10;
@@ -130,22 +171,20 @@ static int __init led_driver_init(void)
     for_each_pci_dev(pdev) {
         // Проверяем, совпадает ли Vendor и Device ID
         if (pdev->vendor == CREATIVE_VENDOR_ID && pdev->device == AE5_DEVICE_ID) {
-            const char *device_name;
-
+            const char *dev_name;
             device_found = true;
 
             // Определяем точное название модели по subsystem ID
             if (pdev->subsystem_vendor == SUBSYS_VENDOR_ID && pdev->subsystem_device == SUBSYS_AE5_PLUS_DEVICE_ID) {
-                device_name = "Creative SoundBlaster AE-5 Plus";
-                proc_filename = AE5_PLUS_PROC_FILENAME;
+                dev_name = "Creative SoundBlaster AE-5 Plus";
             } else if (pdev->subsystem_vendor == SUBSYS_VENDOR_ID && pdev->subsystem_device == SUBSYS_AE5_DEVICE_ID) {
-                device_name = "Creative SoundBlaster AE-5";
-                proc_filename = AE5_PROC_FILENAME;
+                dev_name = "Creative SoundBlaster AE-5";
             } else {
-                device_name = "Creative SoundBlaster AE-5 (Unknown Subsystem)";
+                dev_name = "Creative SoundBlaster AE-5 (Unknown Subsystem)";
             }
 
-            pr_info("%s: Found device: %s at PCI location %s", DRIVER_NAME, device_name, pci_name(pdev));
+            const char* location = pci_name(pdev);
+            pr_info("%s: Found device: %s at PCI location %s", DRIVER_NAME, dev_name, pci_name(pdev));
 
             // Получаем физический адрес начала региона памяти BAR 2
             // Для этой операции не требуется pci_enable_device() или pci_request_regions()
@@ -156,6 +195,9 @@ static int __init led_driver_init(void)
                 // %pa - специальный формат для вывода физических адресов.
                 pr_info("%s: Physical Base Address of BAR %d is: 0x%pa\n",
                         DRIVER_NAME, TARGET_MEM_REGION, &base_address);
+
+                device_name = dev_name;
+                device_location = location;
                 break;
             } else {
                 pr_warn("%s: Device found, but BAR %d is not available or has a zero address", DRIVER_NAME, TARGET_MEM_REGION);
@@ -185,14 +227,31 @@ static int __init led_driver_init(void)
         return -ENOMEM;
     }
 
-    if (proc_create(proc_filename, 0666, NULL, &proc_file_ops) == NULL) {
-        pr_err("%s: Failed to create /proc/%s", DRIVER_NAME, proc_filename);
+    if (proc_create(PROC_FILENAME, 0666, NULL, &proc_file_ops) == NULL) {
+        pr_err("%s: Failed to create /proc/%s", DRIVER_NAME, PROC_FILENAME);
         iounmap(mmio_base);
         return -ENOMEM;
     }
 
-    pr_info("%s: Created /proc/%s entry", DRIVER_NAME, proc_filename);
-    pr_info("%s: To set color, run: echo 0xbbggrr > /proc/%s", DRIVER_NAME, proc_filename);
+    pr_info("%s: Created /proc/%s entry", DRIVER_NAME, PROC_FILENAME);
+    pr_info("%s: To set color, run: echo 0xbbggrr > /proc/%s", DRIVER_NAME, PROC_FILENAME);
+
+    my_kobject = kobject_create_and_add("sbae5_color", kernel_kobj);
+    if (!my_kobject) {
+        pr_err("%s: Failed to create kernel object", DRIVER_NAME);
+
+        return -ENOMEM;
+    }
+
+    int error = sysfs_create_file(my_kobject, &device_name_attribute.attr);
+    if (error) {
+        pr_err("%s: Failed to create the device_name file in /sys/kernel/sbae5_color", DRIVER_NAME);
+    }
+
+    error = sysfs_create_file(my_kobject, &device_location_attribute.attr);
+    if (error) {
+        pr_err("%s: Failed to create the device_location file in /sys/kernel/sbae5_color", DRIVER_NAME);
+    }
 
     return 0;
 }
@@ -200,12 +259,14 @@ static int __init led_driver_init(void)
 static void __exit led_driver_exit(void)
 {
     pr_info("%s: Unloading", DRIVER_NAME);
-    remove_proc_entry(proc_filename, NULL);
-    pr_info("%s: Deleted /proc/%s entry", DRIVER_NAME, proc_filename);
+    remove_proc_entry(PROC_FILENAME, NULL);
+    pr_info("%s: Deleted /proc/%s entry", DRIVER_NAME, PROC_FILENAME);
 
     if (mmio_base) {
         iounmap(mmio_base);
     }
+
+    kobject_put(my_kobject);
 
     pr_info("%s: Unloaded", DRIVER_NAME);
 }
