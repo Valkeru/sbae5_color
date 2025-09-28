@@ -1,13 +1,7 @@
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/io.h>
 #include <linux/proc_fs.h>
-#include <linux/uaccess.h>
-#include <linux/string.h>
 #include <linux/pci.h>
 #include <linux/kobject.h>
-#include <linux/sysfs.h>
+#include "led_data.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Igor Kobiakov");
@@ -18,27 +12,27 @@ MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED color control");
 #define TARGET_MEM_REGION 2
 #define DRIVER_NAME "SBAE5_LED_DRIVER"
 
-// Определяем идентификаторы устройства
-#define CREATIVE_VENDOR_ID 0x1102
-#define AE5_DEVICE_ID      0x0012
-
-// Определяем Subsystem IDs для разных моделей
+// Subsystem IDs
 #define SUBSYS_VENDOR_ID   0x1102
 #define SUBSYS_AE5_DEVICE_ID      0x0051
 #define SUBSYS_AE5_PLUS_DEVICE_ID 0x0191
 
-
 // Mapped memory area pointer
 static void __iomem *mmio_base;
 
+static bool proc_file_created = false;
+static bool kobject_created = false;
+
+// Base address to map
 unsigned long long base_address = 0;
 
-#define PROC_FILENAME "sbae5_led"
-
+// Detected device name to be sent to user space
 static const char* device_name;
+// Detected device location to be sent to user space
 static const char* device_location;
 
-static struct kobject *my_kobject;
+// Kernel object for interaction using sysfs
+static struct kobject *sbae_kobject;
 
 /**
  * Provides device location on PCI bus
@@ -72,52 +66,63 @@ static ssize_t device_name_show(struct kobject *kobj, struct kobj_attribute *att
 static struct kobj_attribute device_location_attribute = __ATTR(device_location, 0664, device_location_show, NULL);
 static struct kobj_attribute device_name_attribute = __ATTR(device_name, 0664, device_name_show, NULL);
 
+static void write_bit(bool bit) {
+    if (!mmio_base) {
+        pr_err("%s: MMIO base not mapped\n", DRIVER_NAME);
+        return;
+    }
+
+    if (bit) {
+        // Set the data bit if bit is 1
+        iowrite32(0x102, mmio_base + LED_CONTROL_OFFSET);
+        // Clock the data bit
+        iowrite32(0x103, mmio_base + LED_CONTROL_OFFSET);
+        // Toggle the clock
+        iowrite32(0x03, mmio_base + LED_CONTROL_OFFSET);
+    } else {
+        // Send bit
+        iowrite32(0x02, mmio_base + LED_CONTROL_OFFSET);
+        // Clock the data bit
+        iowrite32(0x103, mmio_base + LED_CONTROL_OFFSET);
+        // Toggle the clock
+        iowrite32(0x03, mmio_base + LED_CONTROL_OFFSET);
+    }
+}
+
+static void set_led_color(unsigned char red_values, unsigned char green_values, unsigned char blue_values) {
+    // Send brightness bits
+    for (int i = 0; i < 8; i++) {
+        write_bit(true);
+    }
+
+    // Get hex color value
+    uint32_t led_color = blue_values << 16 | green_values << 8 | red_values;
+    for (int i = 0; i < 24; i++) {
+        // Current bit
+        uint32_t bit = (led_color >> (23 - i)) & 0x01;
+        write_bit(bit == 1);
+    }
+}
 
 /**
  * LED control color
  * @param led_color Led color code to set
  */
-static void set_led_color(uint32_t led_color)
+static void handle_colors(struct led_data data)
 {
-    if (!mmio_base) {
-        pr_err("%s: MMIO base not mapped", DRIVER_NAME);
-        return;
-    }
-
-    iowrite32(0xFF, mmio_base + 0x304);
-    iowrite32(0xFF, mmio_base + 0x304);
-
     // Send start frame - 32 0's
     for (int i = 0; i < 32; i++) {
-        iowrite32(0x02, mmio_base + LED_CONTROL_OFFSET);
-        iowrite32(0x103, mmio_base + LED_CONTROL_OFFSET);
-        iowrite32(0x03, mmio_base + LED_CONTROL_OFFSET);
+        write_bit(false);
     }
 
-    // Setting color, two times to complete color change
-    for (int x = 0; x < 2; x++) {
+    unsigned char led_count = data.led_count;
+    for (int i = 0; i < led_count; i++) {
+        set_led_color(data.red_values[i], data.green_values[i], data.blue_values[i]);
+    }
 
-        // 5 LEDs, 32 bit each
-        for (int j = 0; j < 5; j++) {
-            // Set first 8 bits to 1 (three 1 bits + 5 luma bits)
-            for (int i = 0; i < 8; i++) {
-                iowrite32(0x102, mmio_base + LED_CONTROL_OFFSET);
-                iowrite32(0x103, mmio_base + LED_CONTROL_OFFSET);
-                iowrite32(0x03, mmio_base + LED_CONTROL_OFFSET);
-            }
-
-            for (int i = 0; i < 24; i++) {
-                // Current bit
-                uint32_t bit = (led_color >> (23 - i)) & 0x01;
-
-                // Send bit, set the data bit if bit is 1
-                iowrite32((bit == 1) ? 0x102 : 0x02, mmio_base + LED_CONTROL_OFFSET);
-                // Clock the data bit
-                iowrite32(0x103, mmio_base + LED_CONTROL_OFFSET);
-                // Toggle the clock
-                iowrite32(0x03, mmio_base + LED_CONTROL_OFFSET);
-            }
-        }
+    // Send end frame - 32 1's
+    for (int i = 0; i < 32; i++) {
+        write_bit(true);
     }
 }
 
@@ -128,35 +133,27 @@ static void set_led_color(uint32_t led_color)
  * @param __user Input data buffer
  * @return Total bytes count
  */
-static ssize_t proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos)
+static ssize_t on_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos)
 {
-    const int color_buffer_size = 10;
-    char color_buffer[color_buffer_size];
-    uint32_t new_color;
+    struct led_data data;
 
-    if (count > color_buffer_size - 1) {
-        pr_warn("%s: Input too long", DRIVER_NAME);
-        return -EINVAL;
-    }
+    if (count > sizeof(data)) {
+        pr_err("%s: Input too long\n", DRIVER_NAME);
 
-    if (copy_from_user(color_buffer, buffer, count)) {
         return -EFAULT;
     }
-    color_buffer[count] = '\0'; // Terminate string with null-character
 
-    // Transform string into number
-    int control = kstrtouint(color_buffer, 16, &new_color);
-    if (control) {
-        return control;
+    if (copy_from_user(&data, buffer, count)) {
+        return -EFAULT;
     }
 
-    set_led_color(new_color);
+    handle_colors(data);
 
     return count;
 }
 
 static const struct proc_ops proc_file_ops = {
-    .proc_write = proc_write,
+    .proc_write = on_proc_write,
 };
 
 static int __init led_driver_init(void)
@@ -165,16 +162,14 @@ static int __init led_driver_init(void)
     bool device_found = false;
     resource_size_t base_address;
 
-    pr_info("%s: Searching for Creative AE-5 devices", DRIVER_NAME);
+    pr_info("%s: Searching for Creative AE-5 devices\n", DRIVER_NAME);
 
-    // Используем макрос для безопасного перебора всех PCI устройств в системе
     for_each_pci_dev(pdev) {
-        // Проверяем, совпадает ли Vendor и Device ID
-        if (pdev->vendor == CREATIVE_VENDOR_ID && pdev->device == AE5_DEVICE_ID) {
+        if (pdev->vendor == VENDOR_ID && pdev->device == DEVICE_ID) {
             const char *dev_name;
             device_found = true;
 
-            // Определяем точное название модели по subsystem ID
+            // Check device ID to detect particular model
             if (pdev->subsystem_vendor == SUBSYS_VENDOR_ID && pdev->subsystem_device == SUBSYS_AE5_PLUS_DEVICE_ID) {
                 dev_name = "Creative SoundBlaster AE-5 Plus";
             } else if (pdev->subsystem_vendor == SUBSYS_VENDOR_ID && pdev->subsystem_device == SUBSYS_AE5_DEVICE_ID) {
@@ -184,15 +179,12 @@ static int __init led_driver_init(void)
             }
 
             const char* location = pci_name(pdev);
-            pr_info("%s: Found device: %s at PCI location %s", DRIVER_NAME, dev_name, pci_name(pdev));
+            pr_info("%s: Found device: %s at PCI location %s\n", DRIVER_NAME, dev_name, pci_name(pdev));
 
-            // Получаем физический адрес начала региона памяти BAR 2
-            // Для этой операции не требуется pci_enable_device() или pci_request_regions()
+            // Get region 2 starting address
             base_address = pci_resource_start(pdev, TARGET_MEM_REGION);
 
             if (base_address) {
-                // Выводим найденный адрес в лог ядра.
-                // %pa - специальный формат для вывода физических адресов.
                 pr_info("%s: Physical Base Address of BAR %d is: 0x%pa\n",
                         DRIVER_NAME, TARGET_MEM_REGION, &base_address);
 
@@ -200,22 +192,21 @@ static int __init led_driver_init(void)
                 device_location = location;
                 break;
             } else {
-                pr_warn("%s: Device found, but BAR %d is not available or has a zero address", DRIVER_NAME, TARGET_MEM_REGION);
+                pr_warn("%s: Device found, but BAR %d is not available or has a zero address\n", DRIVER_NAME, TARGET_MEM_REGION);
             }
         }
     }
-    // После цикла for_each_pci_dev нужно освободить последнюю ссылку
+
     pci_dev_put(pdev);
-    pci_dev_put(NULL);
 
     if (!device_found) {
-        pr_warn("%s: No matching Creative AE-5 device was found in the system.", DRIVER_NAME);
+        pr_warn("%s: No matching Creative AE-5 device was found in the system\n", DRIVER_NAME);
 
         return 0;
     }
 
     if (!base_address) {
-        pr_err("%s: No valid memory region found", DRIVER_NAME);
+        pr_err("%s: No valid memory region found\n", DRIVER_NAME);
 
         return -ENOMEM;
 
@@ -223,52 +214,61 @@ static int __init led_driver_init(void)
 
     mmio_base = ioremap(base_address, REGION_SIZE);
     if (!mmio_base) {
-        pr_err("%s: Failed to remap MMIO memory", DRIVER_NAME);
+        pr_err("%s: Failed to remap MMIO memory\n", DRIVER_NAME);
         return -ENOMEM;
     }
 
-    if (proc_create(PROC_FILENAME, 0666, NULL, &proc_file_ops) == NULL) {
-        pr_err("%s: Failed to create /proc/%s", DRIVER_NAME, PROC_FILENAME);
+    if (proc_create(PROCFS_FILENAME, 0666, NULL, &proc_file_ops) == NULL) {
+        pr_err("%s: Failed to create /proc/%s\n", DRIVER_NAME, PROCFS_FILENAME);
         iounmap(mmio_base);
         return -ENOMEM;
     }
+    proc_file_created = true;
 
-    pr_info("%s: Created /proc/%s entry", DRIVER_NAME, PROC_FILENAME);
-    pr_info("%s: To set color, run: echo 0xbbggrr > /proc/%s", DRIVER_NAME, PROC_FILENAME);
+    pr_info("%s: Created /proc/%s entry", DRIVER_NAME, PROCFS_FILENAME);
 
-    my_kobject = kobject_create_and_add("sbae5_color", kernel_kobj);
-    if (!my_kobject) {
-        pr_err("%s: Failed to create kernel object", DRIVER_NAME);
+    sbae_kobject = kobject_create_and_add("sbae5_color", kernel_kobj);
+    if (!sbae_kobject) {
+        pr_err("%s: Failed to create kernel object\n", DRIVER_NAME);
 
         return -ENOMEM;
     }
 
-    int error = sysfs_create_file(my_kobject, &device_name_attribute.attr);
+    int error = sysfs_create_file(sbae_kobject, &device_name_attribute.attr);
     if (error) {
-        pr_err("%s: Failed to create the device_name file in /sys/kernel/sbae5_color", DRIVER_NAME);
+        pr_err("%s: Failed to create the device_name file in /sys/kernel/sbae5_color\n", DRIVER_NAME);
+
+        return -ENOMEM;
     }
 
-    error = sysfs_create_file(my_kobject, &device_location_attribute.attr);
+    error = sysfs_create_file(sbae_kobject, &device_location_attribute.attr);
     if (error) {
-        pr_err("%s: Failed to create the device_location file in /sys/kernel/sbae5_color", DRIVER_NAME);
+        pr_err("%s: Failed to create the device_location file in /sys/kernel/sbae5_color\n", DRIVER_NAME);
+
+        return -ENOMEM;
     }
+    kobject_created = true;
 
     return 0;
 }
 
 static void __exit led_driver_exit(void)
 {
-    pr_info("%s: Unloading", DRIVER_NAME);
-    remove_proc_entry(PROC_FILENAME, NULL);
-    pr_info("%s: Deleted /proc/%s entry", DRIVER_NAME, PROC_FILENAME);
+    pr_info("%s: Unloading\n", DRIVER_NAME);
+    if  (proc_file_created) {
+        remove_proc_entry(PROCFS_FILENAME, NULL);
+        pr_info("%s: Deleted /proc/%s entry\n", DRIVER_NAME, PROCFS_FILENAME);
+    }
 
     if (mmio_base) {
         iounmap(mmio_base);
     }
 
-    kobject_put(my_kobject);
+    if (kobject_created) {
+        kobject_put(sbae_kobject);
+    }
 
-    pr_info("%s: Unloaded", DRIVER_NAME);
+    pr_info("%s: Unloaded\n", DRIVER_NAME);
 }
 
 module_init(led_driver_init);

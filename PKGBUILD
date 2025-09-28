@@ -1,7 +1,7 @@
 _pkgbase=sbae5_color
 pkgname=${_pkgbase}-dkms
-pkgver=0.1
-pkgrel=2
+pkgver=0.2
+pkgrel=1
 pkgdesc='Sound Blaster AE-5 plus LED control module'
 arch=(any)
 depends=(dkms)
@@ -11,11 +11,12 @@ source=(
     sbae5_color.c
     dkms.conf
     sbae5_color.conf
+    led_data.h
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
     install -Dm644 dkms.conf -t "${pkgdir}"/usr/src/${_pkgbase}-${pkgver}/
     install -Dm644 sbae5_color.conf -t "${pkgdir}"/usr/lib/modules-load.d/
-    install -Dm644 sbae5_color.c Makefile -t "${pkgdir}"/usr/src/${_pkgbase}-${pkgver}/
+    install -Dm644 sbae5_color.c led_data.h Makefile -t "${pkgdir}"/usr/src/${_pkgbase}-${pkgver}/
 }
