@@ -1,4 +1,4 @@
-_pkgbase=sbae5_color
+_pkgbase=sbae5-color
 pkgname=${_pkgbase}-dkms
 pkgver=0.2
 pkgrel=1
@@ -10,13 +10,13 @@ source=(
     Makefile
     sbae5_color.c
     dkms.conf
-    sbae5_color.conf
+    sbae5-color.conf
     led_data.h
 )
 sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 package() {
     install -Dm644 dkms.conf -t "${pkgdir}"/usr/src/${_pkgbase}-${pkgver}/
-    install -Dm644 sbae5_color.conf -t "${pkgdir}"/usr/lib/modules-load.d/
+    install -Dm644 sbae5-color.conf -t "${pkgdir}"/usr/lib/modules-load.d/
     install -Dm644 sbae5_color.c led_data.h Makefile -t "${pkgdir}"/usr/src/${_pkgbase}-${pkgver}/
 }

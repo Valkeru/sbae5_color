@@ -1,4 +1,5 @@
-obj-m += sbae5_color.o
+obj-m := sbae5-color.o
+sbae5-color-objs := sbae5_color.o
 
 KERNELRELEASE	?= `uname -r`
 KERNEL_DIR	?= /lib/modules/$(KERNELRELEASE)/build

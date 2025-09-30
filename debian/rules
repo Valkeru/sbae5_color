@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+
+VERSION=$(shell dpkg-parsechangelog |grep ^Version:|cut -d ' ' -f 2)
+ARTIFACTS_DIR ?= ..
+
+%:
+	dh $@ --with dkms
+
+override_dh_auto_build:
+override_dh_auto_clean:
+override_dh_install:
+	dh_install Makefile sbae5_color.c led_data.h usr/src/sbae5-color-$(VERSION)/
+	dh_install sbae5-color.conf usr/lib/modules-load.d/
+
+override_dh_dkms:
+	dh_dkms -V $(VERSION)
+
+override_dh_builddeb:
+	echo $(ARTIFACTS_DIR)
+	dh_builddeb $@ --destdir=$(ARTIFACTS_DIR)

@@ -1,0 +1,10 @@
+services:
+  builder:
+    build:
+      context: .
+    image: valheru/debian-builder
+    user: "1000:1000"
+    command: bash -c "debuild -i -us -uc -b && debclean && mv ../*.deb ."
+    volumes:
+      - .:/tmp/build
+      - ./dkms.conf:/tmp/build/debian/dkms

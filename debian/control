@@ -1,0 +1,13 @@
+Source: sbae5-color-driver
+Section: kernel
+Maintainer: Igor Kobiakov <valkeru@valkeru.ru>
+Standards-Version: 4.5.0
+Build-Depends:
+ debhelper-compat (= 12),
+ dh-dkms,
+
+
+Package: sbae5-color-driver-dkms
+Architecture: all
+Depends: dkms
+Description: Creative SoundBlaster AE-5 and AE-5 Plus driver to control internal LEDs

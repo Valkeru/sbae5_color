@@ -5,7 +5,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Igor Kobiakov");
-MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED color control");
+MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED driver");
 
 #define REGION_SIZE 0x1024
 #define LED_CONTROL_OFFSET 0x320
@@ -23,12 +23,9 @@ static void __iomem *mmio_base;
 static bool proc_file_created = false;
 static bool kobject_created = false;
 
-// Base address to map
-unsigned long long base_address = 0;
-
-// Detected device name to be sent to user space
+// Detected device name to be passed to user space
 static const char* device_name;
-// Detected device location to be sent to user space
+// Detected device location to be passed to user space
 static const char* device_location;
 
 // Kernel object for interaction using sysfs
@@ -160,7 +157,7 @@ static int __init led_driver_init(void)
 {
     struct pci_dev *pdev = NULL;
     bool device_found = false;
-    resource_size_t base_address;
+    unsigned long long base_address;
 
     pr_info("%s: Searching for Creative AE-5 devices\n", DRIVER_NAME);
 
@@ -179,7 +176,7 @@ static int __init led_driver_init(void)
             }
 
             const char* location = pci_name(pdev);
-            pr_info("%s: Found device: %s at PCI location %s\n", DRIVER_NAME, dev_name, pci_name(pdev));
+            pr_info("%s: Found device: %s at PCI location %s\n", DRIVER_NAME, dev_name, location);
 
             // Get region 2 starting address
             base_address = pci_resource_start(pdev, TARGET_MEM_REGION);
