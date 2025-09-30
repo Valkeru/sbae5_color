@@ -11,3 +11,8 @@ struct led_data {
     unsigned char green_values[LED_COUNT];
     unsigned char blue_values[LED_COUNT];
 };
+
+struct device_data {
+    const char *name;
+    const char *location;
+};
