@@ -1,6 +1,8 @@
 #include <linux/proc_fs.h>
 #include <linux/pci.h>
 #include <linux/kobject.h>
+#include <linux/cdev.h>
+#include <linux/ioctl.h>
 #include "led_data.h"
 
 MODULE_LICENSE("GPL");
@@ -17,51 +19,71 @@ MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED driver");
 #define SUBSYS_AE5_DEVICE_ID      0x0051
 #define SUBSYS_AE5_PLUS_DEVICE_ID 0x0191
 
+#define IOCTL_COMMAND_READ_DEVICE_INFO _IOR('l', 0, struct device_data)
+#define IOCTL_COMMAND_SET_INTERNAL_COLOR _IOW('l', 1, struct led_data)
+
 // Mapped memory area pointer
 static void __iomem *mmio_base;
 
-static bool proc_file_created = false;
-static bool kobject_created = false;
+static struct device_data device_data = {
+    .name = "",
+    .location = ""
+};
 
-// Detected device name to be passed to user space
-static const char* device_name;
-// Detected device location to be passed to user space
-static const char* device_location;
+// Device info
+static dev_t dev_number;
+static struct class *dev_class;
+static struct cdev chardev;
 
-// Kernel object for interaction using sysfs
-static struct kobject *sbae_kobject;
+static int ioctl_open(struct inode*, struct file*);
+static long ioctl_handler(struct file*, unsigned int, unsigned long);
 
-/**
- * Provides device location on PCI bus
- * Calls by kernel when user reads /sys/kernel/sbae5_color/device_location
- *
- * @param kobj Kernel object
- * @param attr Attribute to read
- * @param buf Buffer to send to user
- * @return Total bytes written
- */
-static ssize_t device_location_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
-    return sprintf(buf, "PCI: %s\n", device_location);
+static void handle_colors(struct led_data data);
+
+// Device operations
+static const struct file_operations fops = {
+        .owner = THIS_MODULE,
+        .open = ioctl_open,
+        .unlocked_ioctl = ioctl_handler
+};
+
+static int ioctl_open(struct inode* inode, struct file* file) {
+    pr_info("%s: ioctl file opened", DRIVER_NAME);
+
+    return 0;
 }
 
-/**
- * Provides device name
- * Calls by kernel when user reads /sys/kernel/sbae5_color/device_name
- *
- * @param kobj Kernel object
- * @param attr Attribute to read
- * @param buf Buffer to send to user
- * @return Total bytes written
- */
-static ssize_t device_name_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
-    return sprintf(buf, "%s\n", device_name);
-}
+static long ioctl_handler(struct file *file, unsigned int command, unsigned long arg) {
+    struct led_data receivedData;
 
-/**
- * Register attributes name and location
- */
-static struct kobj_attribute device_location_attribute = __ATTR(device_location, 0664, device_location_show, NULL);
-static struct kobj_attribute device_name_attribute = __ATTR(device_name, 0664, device_name_show, NULL);
+    pr_info("%s: ioctl handler called\n", DRIVER_NAME);
+
+    switch (command) {
+        case IOCTL_COMMAND_READ_DEVICE_INFO:
+            pr_info("%s: Sending device info\n", DRIVER_NAME);
+
+            if (copy_to_user((void __user*) arg, &device_data, sizeof(device_data))) {
+                pr_err("%s: Failed to send device info\n", DRIVER_NAME);
+            }
+
+            pr_info("%s: Device info successfully sent\n", DRIVER_NAME);
+            break;
+        case IOCTL_COMMAND_SET_INTERNAL_COLOR:
+            pr_info("%s: Setting up LEDs\n", DRIVER_NAME);
+
+            if (copy_from_user(&receivedData, (void __user *) arg, sizeof(receivedData))) {
+                return -ENOMEM;
+            }
+
+            handle_colors(receivedData);
+            break;
+        default:
+            pr_err("%s: Unknown command!\n", DRIVER_NAME);
+            return -ENOMEM;
+    }
+
+    return 0;
+}
 
 static void write_bit(bool bit) {
     if (!mmio_base) {
@@ -123,35 +145,6 @@ static void handle_colors(struct led_data data)
     }
 }
 
-/**
- * Called by kernel on write into /proc/sbae5_led
- *
- * @param file File
- * @param __user Input data buffer
- * @return Total bytes count
- */
-static ssize_t on_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos)
-{
-    struct led_data data;
-
-    if (count > sizeof(data)) {
-        pr_err("%s: Input too long\n", DRIVER_NAME);
-
-        return -EFAULT;
-    }
-
-    if (copy_from_user(&data, buffer, count)) {
-        return -EFAULT;
-    }
-
-    handle_colors(data);
-
-    return count;
-}
-
-static const struct proc_ops proc_file_ops = {
-    .proc_write = on_proc_write,
-};
 
 static int __init led_driver_init(void)
 {
@@ -185,8 +178,10 @@ static int __init led_driver_init(void)
                 pr_info("%s: Physical Base Address of BAR %d is: 0x%pa\n",
                         DRIVER_NAME, TARGET_MEM_REGION, &base_address);
 
-                device_name = dev_name;
-                device_location = location;
+                strncpy(device_data.name, dev_name, NAME_MAX_LEN - 1);
+                strncpy(device_data.location, location, LOCATION_MAX_LEN - 1);
+                device_data.name[NAME_MAX_LEN - 1] = '\0';
+                device_data.location[LOCATION_MAX_LEN - 1] = '\0';
                 break;
             } else {
                 pr_warn("%s: Device found, but BAR %d is not available or has a zero address\n", DRIVER_NAME, TARGET_MEM_REGION);
@@ -215,36 +210,46 @@ static int __init led_driver_init(void)
         return -ENOMEM;
     }
 
-    if (proc_create(PROCFS_FILENAME, 0666, NULL, &proc_file_ops) == NULL) {
-        pr_err("%s: Failed to create /proc/%s\n", DRIVER_NAME, PROCFS_FILENAME);
+
+    if (alloc_chrdev_region(&dev_number, 0, 1, "sbae5-color") < 0) {
+        pr_err("%s: Failed to create /dev/%s\n", DRIVER_NAME, PROCFS_FILENAME);
         iounmap(mmio_base);
         return -ENOMEM;
     }
-    proc_file_created = true;
 
-    pr_info("%s: Created /proc/%s entry", DRIVER_NAME, PROCFS_FILENAME);
-
-    sbae_kobject = kobject_create_and_add("sbae5_color", kernel_kobj);
-    if (!sbae_kobject) {
-        pr_err("%s: Failed to create kernel object\n", DRIVER_NAME);
+    dev_class = class_create("argb-control");
+    if (IS_ERR(dev_class)) {
+        unregister_chrdev_region(dev_number, 1);
 
         return -ENOMEM;
     }
 
-    int error = sysfs_create_file(sbae_kobject, &device_name_attribute.attr);
-    if (error) {
-        pr_err("%s: Failed to create the device_name file in /sys/kernel/sbae5_color\n", DRIVER_NAME);
+    // Don't forget to chmod 666 (and set udev rules later)
+    // KERNEL=="sbae5-color", MODE="0666"
+    if (device_create(dev_class, NULL, dev_number, NULL, "sbae5-color") == NULL) {
+        pr_err("failed to create device\n");
+
+        class_destroy(dev_class);
+        unregister_chrdev_region(dev_number, 1);
+    }
+
+    pr_info("%s: Created /dev/%s entry", DRIVER_NAME, PROCFS_FILENAME);
+
+    cdev_init(&chardev, &fops);
+    chardev.owner = THIS_MODULE;
+    if (cdev_add(&chardev, dev_number, 1) < 0) {
+        pr_err("%s: Failed to create chardev\n", DRIVER_NAME);
+        if (mmio_base) {
+            iounmap(mmio_base);
+        }
+        device_destroy(dev_class, dev_number);
+        class_destroy(dev_class);
+        class_destroy(dev_class);
 
         return -ENOMEM;
     }
 
-    error = sysfs_create_file(sbae_kobject, &device_location_attribute.attr);
-    if (error) {
-        pr_err("%s: Failed to create the device_location file in /sys/kernel/sbae5_color\n", DRIVER_NAME);
-
-        return -ENOMEM;
-    }
-    kobject_created = true;
+    pr_info("%s: Driver successfully loaded", DRIVER_NAME);
 
     return 0;
 }
@@ -252,17 +257,14 @@ static int __init led_driver_init(void)
 static void __exit led_driver_exit(void)
 {
     pr_info("%s: Unloading\n", DRIVER_NAME);
-    if  (proc_file_created) {
-        remove_proc_entry(PROCFS_FILENAME, NULL);
-        pr_info("%s: Deleted /proc/%s entry\n", DRIVER_NAME, PROCFS_FILENAME);
-    }
+
+    cdev_del(&chardev);
+    device_destroy(dev_class, dev_number);
+    class_destroy(dev_class);
+    class_destroy(dev_class);
 
     if (mmio_base) {
         iounmap(mmio_base);
-    }
-
-    if (kobject_created) {
-        kobject_put(sbae_kobject);
     }
 
     pr_info("%s: Unloaded\n", DRIVER_NAME);

@@ -11,6 +11,7 @@ override_dh_auto_clean:
 override_dh_install:
 	dh_install Makefile sbae5_color.c led_data.h usr/src/sbae5-color-$(VERSION)/
 	dh_install sbae5-color.conf usr/lib/modules-load.d/
+	dh_install 50-sbae-color.rules etc/udev/rules.d/
 
 override_dh_dkms:
 	dh_dkms -V $(VERSION)

@@ -4,7 +4,6 @@ services:
       context: .
     image: valheru/debian-builder
     user: "1000:1000"
-    command: bash -c "debuild -i -us -uc -b && debclean && mv ../*.deb ."
+    command: bash -c "cp dkms.conf debian/dkms && debuild -i -us -uc -b && debclean && mv ../*.deb . && rm debian/dkms"
     volumes:
       - .:/tmp/build
-      - ./dkms.conf:/tmp/build/debian/dkms
