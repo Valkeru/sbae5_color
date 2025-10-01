@@ -1,7 +1,7 @@
 #include <linux/ioctl.h>
 
 #define LED_COUNT 5
-#define PROCFS_FILENAME "sbae5_color"
+#define DEV_FILENAME "sbae5-color"
 
 // Device IDs
 #define VENDOR_ID 0x1102
