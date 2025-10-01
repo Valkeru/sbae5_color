@@ -1,14 +1,8 @@
 # Creative SoundBlaster AE5 and AE5Plus LED driver for Linux
 
-# WIP
+## Build 
 
-## Build
-
-### Dependencies
-
-To build package you need dkms installed  
-
-# Debian-based
+### Debian-based
 Use docker:  
 ```shell
 docker compose build
