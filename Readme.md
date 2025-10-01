@@ -27,37 +27,49 @@ $ sudo pacman -U sbae5-color-dkms-0.2-1-any.pkg.tar.zst
 
 ## How to use
 
-To get particular device name and PCI bus location you can read following files:  
-`/sys/kernel/sbae5_color/device_name`  
-`/sys/kernel/sbae5_color/device_location`
+Open file `/dev/sbae5-color` and use ioctl with operations and structures described in [led_data.h](led_data.h)
 
-To set LED colors, you need to put 16 bytes sequence into `/proc/sbae5_color` file:  
-+ byte 1 - LED count to change, 1 to 5
-+ bytes 2-6 - red values for LEDs
-+ bytes 7-11 - green values for LEDs
-+ bytes 12-16 - blue values for LEDs
+Receive device data:
 
-For C/C++ just write structure described in [led_data.h](led_data.h)
+```c++
+int fd = open("/dev/sbae5-color", O_RDONLY);
 
-Bash:
+if (fd < 0) {
+    std::cerr << "Failed to open device file: " << strerror(errno) << std::endl;
+    return false;
+}
 
-```shell
-#! /usr/bin/env bash
+// Device info would be written here
+device_data data;
 
-PROC_FILE="/proc/sbae5_color"
-MAX_LEDS=5
+int result = ioctl(fd, IOCTL_COMMAND_READ_DEVICE_INFO, &data);
+if (result < 0) {
+    std::cerr << "IOCTL READ FAILED" << std::endl;
+} else {
+    std::cout << "Device name: " << data.name << std::endl;
+    std::cout << "Device PCI location: " << data.location << std::endl;    
+}
 
-if [[ ! -w "$PROC_FILE" ]]; then
-    echo "Unable to write $PROC_FILE"
-    exit 1
-fi
+close(fd);
+```
 
-RED_COLORS="ffff0000ff"
-GREEN_COLORS="00ffffff00"
-BLUE_COLORS="000000ffff"
-LED_COUNT="05"
+LED color setting:
+```c++
+// Setting white color
+led_data data = {
+    5,
+    {255, 255, 255, 255, 255},
+    {255, 255, 255, 255, 255},
+    {255, 255, 255, 255, 255}
+};
 
-DATA="${LED_COUNT}${RED_COLORS}${GREEN_COLORS}${BLUE_COLORS}"
+int fd = open("/dev/sbae5-color", O_WRONLY);
+if (fd < 0) {
+    std:: cerr << "Failed to open color control file: " << strerror(errno) << std::endl;
 
-echo "$DATA" | xxd -r -p > "$PROC_FILE"
+    return;
+}
+
+ioctl(fd, IOCTL_COMMAND_SET_INTERNAL_COLOR, &data);
+close(fd);
 ```

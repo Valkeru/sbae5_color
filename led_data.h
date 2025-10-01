@@ -1,3 +1,5 @@
+#include <linux/ioctl.h>
+
 #define LED_COUNT 5
 #define PROCFS_FILENAME "sbae5_color"
 
@@ -8,6 +10,8 @@
 #define NAME_MAX_LEN 100
 #define LOCATION_MAX_LEN 100
 
+#define IOCTL_COMMAND_READ_DEVICE_INFO _IOR('l', 0, struct device_data)
+#define IOCTL_COMMAND_SET_INTERNAL_COLOR _IOW('l', 1, struct led_data)
 
 struct led_data {
     unsigned char led_count;

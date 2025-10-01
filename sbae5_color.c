@@ -1,8 +1,6 @@
 #include <linux/proc_fs.h>
 #include <linux/pci.h>
-#include <linux/kobject.h>
 #include <linux/cdev.h>
-#include <linux/ioctl.h>
 #include "led_data.h"
 
 MODULE_LICENSE("GPL");
@@ -18,9 +16,6 @@ MODULE_DESCRIPTION("Creative SoundBlaster AE-5/AE-5 Plus LED driver");
 #define SUBSYS_VENDOR_ID   0x1102
 #define SUBSYS_AE5_DEVICE_ID      0x0051
 #define SUBSYS_AE5_PLUS_DEVICE_ID 0x0191
-
-#define IOCTL_COMMAND_READ_DEVICE_INFO _IOR('l', 0, struct device_data)
-#define IOCTL_COMMAND_SET_INTERNAL_COLOR _IOW('l', 1, struct led_data)
 
 // Mapped memory area pointer
 static void __iomem *mmio_base;
