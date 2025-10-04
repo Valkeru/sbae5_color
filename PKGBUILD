@@ -1,6 +1,6 @@
 _pkgbase=sbae5-color
 pkgname=${_pkgbase}-dkms
-pkgver=0.3.1
+pkgver=0.3.2
 pkgrel=1
 pkgdesc='Sound Blaster AE-5 and AE-5plus LED driver'
 arch=(any)

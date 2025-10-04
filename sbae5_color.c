@@ -102,6 +102,8 @@ static int __init led_driver_init()
         return device_check;
     }
 
+    set_default_color();
+
     pr_info("%s: Driver successfully loaded", DRIVER_NAME);
 
     return 0;
@@ -169,8 +171,8 @@ static long ioctl_handler(struct file *file, unsigned int command, unsigned long
                 return -ENOMEM;
             }
 
-            if (received_data.led_count > LED_COUNT) {
-                pr_err("%s: Invalid LED count received: %d. Max LED count is %d", DRIVER_NAME, received_data.led_count, LED_COUNT);
+            if (received_data.led_count > INTERNAL_LED_COUNT) {
+                pr_err("%s: Invalid LED count received: %d. Max LED count is %d", DRIVER_NAME, received_data.led_count, INTERNAL_LED_COUNT);
 
                 return -ENOMEM;
             }
@@ -241,9 +243,38 @@ static void set_led_color(unsigned char red_values, unsigned char green_values, 
     }
 }
 
+
+static void set_default_color() {
+    // Default color is pure red
+    // May be useful if driver was reloaded
+    struct led_data data = {
+            INTERNAL_LED_COUNT,
+            {0xff, 0xff, 0xff, 0xff, 0xff},
+            {0x00, 0x00, 0x00, 0x00, 0x00},
+            {0x00, 0x00, 0x00, 0x00, 0x00}
+    };
+
+    handle_colors(data);
+}
+
+static void disable_leds(void) {
+    struct led_data data = {
+            INTERNAL_LED_COUNT,
+            {0x00, 0x00, 0x00, 0x00, 0x00},
+            {0x00, 0x00, 0x00, 0x00, 0x00},
+            {0x00, 0x00, 0x00, 0x00, 0x00}
+    };
+
+    handle_colors(data);
+}
+
 static void __exit led_driver_exit()
 {
     pr_info("%s: Unloading\n", DRIVER_NAME);
+
+    // Disable leds when driver is unloaded
+    // Behavior is similar to SB Command in Windows
+    disable_leds();
 
     cdev_del(&chardev);
     device_destroy(dev_class, dev_number);

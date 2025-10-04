@@ -1,6 +1,6 @@
 #include <linux/ioctl.h>
 
-#define LED_COUNT 5
+#define INTERNAL_LED_COUNT 5
 #define DEV_FILENAME "sbae5-color"
 
 // Device IDs
@@ -10,14 +10,15 @@
 #define NAME_MAX_LEN 100
 #define LOCATION_MAX_LEN 100
 
-#define IOCTL_COMMAND_READ_DEVICE_INFO _IOR('l', 0, struct device_data)
-#define IOCTL_COMMAND_SET_INTERNAL_COLOR _IOW('l', 1, struct led_data)
+#define IOCTL_MAGIC 'l'
+#define IOCTL_COMMAND_READ_DEVICE_INFO _IOR(IOCTL_MAGIC, 0, struct device_data)
+#define IOCTL_COMMAND_SET_INTERNAL_COLOR _IOW(IOCTL_MAGIC, 1, struct led_data)
 
 struct led_data {
     unsigned char led_count;
-    unsigned char red_values[LED_COUNT];
-    unsigned char green_values[LED_COUNT];
-    unsigned char blue_values[LED_COUNT];
+    unsigned char red_values[INTERNAL_LED_COUNT];
+    unsigned char green_values[INTERNAL_LED_COUNT];
+    unsigned char blue_values[INTERNAL_LED_COUNT];
 };
 
 struct device_data {

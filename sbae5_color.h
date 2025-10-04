@@ -21,6 +21,8 @@
  */
 static int __init led_driver_init(void);
 
+static void set_default_color(void);
+
 /*
  * Exit handler
  * Remove devices, release resources
